@@ -9,6 +9,14 @@ from fixkit.constants import DEFAULT_WORK_DIR
 from avicenna.avicenna import Avicenna, Input, OracleResult, Grammar
 from isla.language import Formula
 from isla.solver import ISLaSolver
+import logging
+import shutil
+
+LOGGER = logging.getLogger("fixkit")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(name)s :: %(levelname)-8s :: %(message)s",
+)
 
 
 class TestGenerator(ABC):
@@ -16,7 +24,8 @@ class TestGenerator(ABC):
     def __init__(
         self,
         out: Optional[os.PathLike] = None,
-        saving_method: Optional[str] = None
+        saving_method: Optional[str] = None,
+        overwrite: Optional[bool] = False
     ):
         """
         Initialize the test generator
@@ -29,6 +38,8 @@ class TestGenerator(ABC):
         self.saving_method = saving_method or "files" 
         if self.saving_method not in ["json", "files"]:
             raise ValueError('Invalid argument. Use either "json" or "files".')
+        
+        self.overwrite = overwrite
         
         self.failing = None
         self.passing = None
@@ -46,6 +57,8 @@ class TestGenerator(ABC):
         elif self.saving_method == "files":
             self._save_as_files()
 
+        LOGGER.info(f"Saved {len(self.failing) + len(self.passing)} test cases under {self.out}")
+
 
     def _save_as_files(self):
         """
@@ -56,6 +69,8 @@ class TestGenerator(ABC):
         """
 
         dir = self.out
+        if self.overwrite:
+            shutil.rmtree(dir)
         dir.mkdir(parents=True, exist_ok=True)
 
         for idx, test in enumerate(self.passing):
@@ -75,6 +90,8 @@ class TestGenerator(ABC):
         """
 
         dir = self.out
+        if self.overwrite:
+            shutil.rmtree(dir)
         dir.mkdir(parents=True, exist_ok=True)
         
         filepath_failing = os.path.join(dir, "failing_tests.json")
@@ -175,7 +192,8 @@ class AvicennaTestGenerator(TestGenerator):
         initial_inputs: List[str],
         max_iterations: int,
         out: Optional[os.PathLike] = None,
-        saving_method: Optional[str] = None
+        saving_method: Optional[str] = None,
+        overwrite: Optional[bool] = False
     ):
         """
         Initialize the test generator
@@ -189,7 +207,8 @@ class AvicennaTestGenerator(TestGenerator):
 
         super().__init__(
             out=Path(out or DEFAULT_WORK_DIR, "avicenna_test_cases"),
-            saving_method=saving_method
+            saving_method=saving_method,
+            overwrite=overwrite
             )
 
         self.oracle = oracle
@@ -216,6 +235,8 @@ class AvicennaTestGenerator(TestGenerator):
         self.failing = self.avicenna.report.get_all_failing_inputs()
         self.passing = self.avicenna.report.get_all_passing_inputs()
 
+        LOGGER.info(f"Avicenna generated {len(self.failing)} failing and {len(self.passing)} passing inputs.")
+
         self._save_inputs()
 
 
@@ -237,19 +258,23 @@ class AvicennaTestGenerator(TestGenerator):
             formula = self.diagnosis[0],
             enable_optimized_z3_queries = False)
         
-        try:        
-            for _ in range(max_iterations):
-                inp = solver.solve()
-                
-                if self.oracle(inp) == OracleResult.PASSING:
+          
+        for _ in range(max_iterations):
+            try:      
+                inp = solver.solve()            
+                oracle_result, _ = self.oracle(inp)
+
+                if oracle_result == OracleResult.PASSING:
                     passing.append(str(inp))
                 else:
                     failing.append(str(inp))
-        except StopIteration:          
-            logger.info(f"The solver found {len(failing)} more failing inputs.")
+            except StopIteration:          
+                continue
 
         self.passing.extend(passing)
         self.failing.extend(failing)
+
+        LOGGER.info(f"ISLaSolver generated {len(failing)} more failing and {len(passing)} passing inputs.")
 
         self._save_inputs()
 
