@@ -6,7 +6,11 @@ import logging
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional, Callable
 from fixkit.constants import DEFAULT_WORK_DIR
-from avicenna.avicenna import Avicenna, Input, OracleResult, Grammar
+from avicenna.core import Input, Grammar
+from avicenna.data import OracleResult
+from avicenna import Avicenna
+from avicenna.runner.report import SingleFailureReport
+from avicenna.diagnostic import Candidate
 from isla.language import Formula
 from isla.solver import ISLaSolver
 import logging
@@ -90,7 +94,7 @@ class TestGenerator(ABC):
         """
 
         dir = self.out
-        if self.overwrite:
+        if self.overwrite and dir.exists():
             shutil.rmtree(dir)
         dir.mkdir(parents=True, exist_ok=True)
         
@@ -220,17 +224,19 @@ class AvicennaTestGenerator(TestGenerator):
             grammar = self.grammar, 
             oracle = self.oracle, 
             initial_inputs = self.initial_inputs,
-            max_iterations = self.max_iterations
+            max_iterations = self.max_iterations,
+            #enable_logging = True,
+            report = SingleFailureReport()
             )
         
-        self.diagnosis = None
+        self.diagnoses = None
 
     def run(self):
         """
         Execute Avicenna with parameter and store results in out directory.
         """
 
-        self.diagnosis: Tuple[Formula, float, float] = self.avicenna.explain()
+        self.diagnoses: List[Candidate] = self.avicenna.explain()
 
         self.failing = self.avicenna.report.get_all_failing_inputs()
         self.passing = self.avicenna.report.get_all_passing_inputs()
@@ -240,23 +246,26 @@ class AvicennaTestGenerator(TestGenerator):
         self._save_inputs()
 
 
-    def generate_more_inputs(self, max_iterations: int):
+    def generate_more_inputs(self, max_iterations: int, optimized_queries: bool = False):
         """
         Solves diagnosis for more inputs if a valid Diagnosis exists.
         """
         logger = logging.getLogger(__name__)
         
-        if self.diagnosis is None:
+        if not self.diagnoses:
             logger.info("No diagnosis was found.")
             return
 
         passing: List[str] = []
         failing: List[str] = []
+        undefined: List[str] = []
+
+        failure_dianosis = self.diagnoses.pop(0)
 
         solver = ISLaSolver(
             grammar = self.grammar,
-            formula = self.diagnosis[0],
-            enable_optimized_z3_queries = False)
+            formula = failure_dianosis.formula,
+            enable_optimized_z3_queries = optimized_queries)
         
           
         for _ in range(max_iterations):
@@ -266,15 +275,26 @@ class AvicennaTestGenerator(TestGenerator):
 
                 if oracle_result == OracleResult.PASSING:
                     passing.append(str(inp))
-                else:
+                elif oracle_result == OracleResult.FAILING:
                     failing.append(str(inp))
-            except StopIteration:          
-                continue
+                else:
+                    undefined.append(str(inp))
+            except StopIteration:
+                
+                #solver = ISLaSolver(
+                #    grammar = self.grammar,
+                #    formula = self.diagnosis[0],
+                #    enable_optimized_z3_queries = False)
+                #    continue
+
+                break
 
         self.passing.extend(passing)
         self.failing.extend(failing)
 
         LOGGER.info(f"ISLaSolver generated {len(failing)} more failing and {len(passing)} passing inputs.")
+        if undefined:
+            LOGGER.info(f"ISLaSolver generated {len(undefined)} undefined inputs.")
 
         self._save_inputs()
 
