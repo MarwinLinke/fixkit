@@ -199,6 +199,7 @@ def _evaluate_tests4py(
                     elif result == TestResult.FAILING:
                         failing.add(test)
                 candidate.fitness = fitness.fitness(passing, failing)
+                candidate.tests4py_report = report
         pre_calculated[key] = candidate.fitness
 
 

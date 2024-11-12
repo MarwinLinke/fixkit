@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, List
 
 from fixkit.genetic.operators import MutationOperator
+from tests4py.api.report import TestReport, SystemtestTestReport
 
 
 class Candidate:
@@ -89,6 +90,7 @@ class GeneticCandidate(Candidate):
         trees: Iterable[os.PathLike] | Dict[os.PathLike, ast.AST] = None,
         files: Dict[int, os.PathLike] = None,
         lines: Dict[os.PathLike, Dict[int, List[int]]] = None,
+        tests4py_report: Optional[TestReport] = None
     ):
         """
         Initialize the class with the provided source path, mutations, generation number, fitness, statements, trees,
@@ -103,11 +105,13 @@ class GeneticCandidate(Candidate):
         :param Optional[Dict[int, os.PathLike]] files: Dictionary of file indices and source paths.
         :param Optional[Dict[os.PathLike, Dict[int, List[int]]]] lines: Dictionary of source paths and line numbers to
         statement identifiers.
+        :param Optional[TestReport]: Saves test report after evaluating candidate with tests4py engines.
         """
         super().__init__(src, statements, trees, files, lines)
         self.mutations = mutations or list()
         self.gen = gen
         self.fitness = fitness
+        self.tests4py_report = tests4py_report
 
     @staticmethod
     def from_candidate(candidate: Candidate) -> "GeneticCandidate":
