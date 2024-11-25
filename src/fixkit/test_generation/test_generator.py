@@ -12,9 +12,11 @@ from avicenna import Avicenna
 from avicenna.runner.report import SingleFailureReport
 from avicenna.diagnostic import Candidate
 from isla.language import Formula
-from isla.solver import ISLaSolver
+from isla.solver import ISLaSolver, _DEFAULTS
+from isla.language import ISLaUnparser, parse_isla
 import logging
 import shutil
+import time
 
 LOGGER = logging.getLogger("fixkit")
 logging.basicConfig(
@@ -29,7 +31,7 @@ class TestGenerator(ABC):
         self,
         out: Optional[os.PathLike] = None,
         saving_method: Optional[str] = None,
-        overwrite: Optional[bool] = False
+        save_automatically: Optional[bool] = True
     ):
         """
         Initialize the test generator
@@ -42,9 +44,9 @@ class TestGenerator(ABC):
         self.saving_method = saving_method or "files" 
         if self.saving_method not in ["json", "files"]:
             raise ValueError('Invalid argument. Use either "json" or "files".')
-        
-        self.overwrite = overwrite
-        
+
+        self.save_automatically = save_automatically
+
         self.failing = None
         self.passing = None
     
@@ -56,6 +58,9 @@ class TestGenerator(ABC):
         pass
 
     def _save_inputs(self):
+        if not self.save_automatically:
+            return
+
         if self.saving_method == "json":
             self._save_as_json()
         elif self.saving_method == "files":
@@ -72,8 +77,8 @@ class TestGenerator(ABC):
         - failing_test_X.txt
         """
 
-        dir = self.out
-        if self.overwrite:
+        dir = self.out / "test_cases"
+        if dir.exists():
             shutil.rmtree(dir)
         dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,8 +98,8 @@ class TestGenerator(ABC):
         Saves inputs in json files.
         """
 
-        dir = self.out
-        if self.overwrite and dir.exists():
+        dir = self.out / "test_cases"
+        if dir.exists():
             shutil.rmtree(dir)
         dir.mkdir(parents=True, exist_ok=True)
         
@@ -116,6 +121,24 @@ class TestGenerator(ABC):
         
         with open(filepath_passing, 'w') as f:
             json.dump(passing_data, f)
+
+
+    def save_test_cases(self, path: os.PathLike):
+
+        dir = Path(path)
+        dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, test in enumerate(self.passing):
+            passing_file_path = dir / f"passing_test_{idx}"
+            with passing_file_path.open("w") as f:
+                f.write(str(test))
+
+        for idx, test in enumerate(self.failing):
+            failing_file_path = dir / f"failing_test_{idx}"
+            with failing_file_path.open("w") as f:
+                f.write(str(test))
+
+        LOGGER.info(f"Saved {len(self.failing) + len(self.passing)} test cases under {self.out}")
 
     def get_failing_tests(self) -> List[str]:
         """
@@ -197,7 +220,8 @@ class AvicennaTestGenerator(TestGenerator):
         max_iterations: int,
         out: Optional[os.PathLike] = None,
         saving_method: Optional[str] = None,
-        overwrite: Optional[bool] = False
+        save_automatically: Optional[bool] = True,
+        identifier: Optional[str] = None,
     ):
         """
         Initialize the test generator
@@ -207,18 +231,20 @@ class AvicennaTestGenerator(TestGenerator):
         :param List[str] initial_inputs: The initial inputs required to run Avicenna, at least one passing and one failing one.
         :param int iterations: The number of iterations.
         :param Optional[os.PathLike] out: The path location for saving labeled inputs.
+        :param Optional[str] saving_method: Use "json" to save inputs inside json files or "files" separate text files for each input.
         """
 
         super().__init__(
             out=Path(out or DEFAULT_WORK_DIR, "avicenna_test_cases"),
             saving_method=saving_method,
-            overwrite=overwrite
+            save_automatically=save_automatically
             )
 
         self.oracle = oracle
         self.grammar = grammar
         self.initial_inputs = initial_inputs
         self.max_iterations = max_iterations
+        self.identifier = identifier or "formula"
 
         self.avicenna = Avicenna(
             grammar = self.grammar, 
@@ -229,49 +255,104 @@ class AvicennaTestGenerator(TestGenerator):
             report = SingleFailureReport()
             )
         
+        self.failing = []    
+        self.passing = []
         self.diagnoses = None
 
-    def run(self):
+    def _save_formula(self) -> str:
+
+        dir = Path(self.out) / "formulas"
+        dir.mkdir(parents=True, exist_ok=True)
+        file_path = dir / self.identifier
+
+        formula = self.diagnoses[0].formula     
+        formula_string = ISLaUnparser(formula).unparse()
+
+        with file_path.open("w") as f:
+            f.write(formula_string)
+        
+        return file_path
+
+    def load_formula(self, identifier: str) -> str:
+        
+        logger = logging.getLogger(__name__)
+
+        dir = Path(self.out) / "formulas"
+        file_path = dir / identifier
+        if not file_path.exists():
+            logger.info(f"No cached formula found at {dir}")
+            return None
+
+        with file_path.open("r") as f:
+            formula = f.read()
+
+        return formula
+    
+    def run(self, save_inputs: bool = True):
         """
         Execute Avicenna with parameter and store results in out directory.
         """
 
         self.diagnoses: List[Candidate] = self.avicenna.explain()
 
-        self.failing = self.avicenna.report.get_all_failing_inputs()
-        self.passing = self.avicenna.report.get_all_passing_inputs()
+        failing = self.avicenna.report.get_all_failing_inputs()
+        passing = self.avicenna.report.get_all_passing_inputs()
 
-        LOGGER.info(f"Avicenna generated {len(self.failing)} failing and {len(self.passing)} passing inputs.")
+        file_path = self._save_formula()
+        
+        LOGGER.info(f"Saved formula under {file_path}.")
+        LOGGER.info(f"Avicenna generated {len(failing)} failing and {len(passing)} passing inputs.")
 
-        self._save_inputs()
+        if save_inputs:
+            self.failing = failing
+            self.passing = passing
+            self._save_inputs()
 
 
-    def generate_more_inputs(self, max_iterations: int, optimized_queries: bool = False):
+    def generate_more_inputs(self, 
+        max_iterations: int, 
+        inverse_formula: bool = False,
+        formula: Formula = None,
+        only_unique_inputs: bool = False,
+        optimized_queries: bool = False
+        ):
         """
-        Solves diagnosis for more inputs if a valid Diagnosis exists.
+        Solves diagnosis for more inputs. If no formula is specified, takes diagnosis from last run of this TestGenerator.
         """
         logger = logging.getLogger(__name__)
-        
-        if not self.diagnoses:
-            logger.info("No diagnosis was found.")
+
+        if formula:
+            failure_formula = parse_isla(formula, self.grammar, _DEFAULTS.structural_predicates, _DEFAULTS.semantic_predicates)
+        elif self.diagnoses:
+            failure_formula = self.diagnoses[0].formula      
+        else:
+            logger.info("No diagnosis or formula was found.")
             return
 
         passing: List[str] = []
         failing: List[str] = []
         undefined: List[str] = []
 
-        failure_dianosis = self.diagnoses.pop(0)
-
         solver = ISLaSolver(
             grammar = self.grammar,
-            formula = failure_dianosis.formula,
-            enable_optimized_z3_queries = optimized_queries)
+            formula = -failure_formula if inverse_formula else failure_formula,
+            enable_optimized_z3_queries = optimized_queries)       
         
-          
-        for _ in range(max_iterations):
+        i = 0
+        isla_restart = 0
+        fail_safe = 0
+        while i < max_iterations and isla_restart < 100:
             try:      
                 inp = solver.solve()            
                 oracle_result, _ = self.oracle(inp)
+
+                if fail_safe >= 50:
+                    fail_safe = 0
+                    raise StopIteration
+
+                if (only_unique_inputs and (str(inp) in passing or str(inp) in failing)):
+                    fail_safe += 1
+                    continue
 
                 if oracle_result == OracleResult.PASSING:
                     passing.append(str(inp))
@@ -279,20 +360,35 @@ class AvicennaTestGenerator(TestGenerator):
                     failing.append(str(inp))
                 else:
                     undefined.append(str(inp))
-            except StopIteration:
-                
-                #solver = ISLaSolver(
-                #    grammar = self.grammar,
-                #    formula = self.diagnosis[0],
-                #    enable_optimized_z3_queries = False)
-                #    continue
+                    fail_safe += 1
+                    continue
 
-                break
+                i += 1
+                if i % 10 == 0:
+                    LOGGER.info(f"ISLaSolver generated {len(failing)} failing and {len(passing)} passing inputs so far.")
+
+            except StopIteration:
+
+                isla_restart += 1 
+                if isla_restart % 10 == 0:
+                    LOGGER.info(f"ISLaSolver was restarted {isla_restart} times (max 100). Generated {len(failing)} failing and {len(passing)} passing inputs so far.")
+
+                solver = ISLaSolver(
+                    grammar = self.grammar,
+                    formula = -failure_formula if inverse_formula else failure_formula,
+                    enable_optimized_z3_queries = optimized_queries)       
+                continue
+                #break
+
+        if only_unique_inputs:
+            passing = list(set(passing))
+            failing = list(set(failing))
 
         self.passing.extend(passing)
         self.failing.extend(failing)
 
-        LOGGER.info(f"ISLaSolver generated {len(failing)} more failing and {len(passing)} passing inputs.")
+        unique = " unique" if only_unique_inputs else ""
+        LOGGER.info(f"ISLaSolver generated {len(failing)}{unique} failing and {len(passing)}{unique} passing inputs.")
         if undefined:
             LOGGER.info(f"ISLaSolver generated {len(undefined)} undefined inputs.")
 
