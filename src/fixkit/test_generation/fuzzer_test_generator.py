@@ -19,6 +19,7 @@ class GrammarFuzzerTestGenerator(TestGenerator):
         num_failing: int,
         num_passing: int,
         max_iterations: int = 20000,
+        seed: int = 0,
         out: Optional[os.PathLike] = None,
         saving_method: Optional[str] = None,
         save_automatically: Optional[bool] = True,
@@ -36,6 +37,7 @@ class GrammarFuzzerTestGenerator(TestGenerator):
         """
 
         super().__init__(
+            seed=seed,
             out=Path(out or DEFAULT_WORK_DIR, "grammar_fuzzer"),
             saving_method=saving_method,
             save_automatically=save_automatically
@@ -88,9 +90,6 @@ class GrammarFuzzerTestGenerator(TestGenerator):
 
             if failing_count >= self.num_failing and passing_count >= self.num_passing:
                 break
-
-        passing_inputs = list(set(passing_inputs))
-        failing_inputs = list(set(failing_inputs))
 
         LOGGER.info(f"Grammar fuzzer found {len(failing_inputs)} failing and {len(passing_inputs)} passing inputs in {iteration} iterations.")
 

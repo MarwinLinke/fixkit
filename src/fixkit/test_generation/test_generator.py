@@ -7,11 +7,14 @@ from typing import List, Optional
 from fixkit.constants import DEFAULT_WORK_DIR
 import shutil
 from fixkit.logger import LOGGER
+import random
+import numpy as np
 
 class TestGenerator(ABC):
 
     def __init__(
         self,
+        seed: int = 0,
         out: Optional[os.PathLike] = None,
         saving_method: Optional[str] = None,
         save_automatically: Optional[bool] = True
@@ -22,7 +25,10 @@ class TestGenerator(ABC):
         :param Optional[str] saving_method: Saves passing and failing test cases in json files or separate text files.
         :param Optional[bool] save_automatically: If true, test cases are automatically saved after running. Alternatively, use save_test_cases() with a given path. 
         """
-    
+
+        self.seed = seed
+        random.seed(seed)
+        np.random.seed(seed)
         self.out = Path(out or DEFAULT_WORK_DIR)
 
         self.saving_method = saving_method or "files" 
@@ -169,6 +175,20 @@ class TestGenerator(ABC):
         else:
             return []
         
+    @staticmethod
+    def load_failing_test_paths(path: os.PathLike, num_tests: int) -> List[os.PathLike]:
+        """
+        Retrieves first X number of failing test paths from specified directory.
+        Only works with text files saving method.
+        """
+        filepath = Path(path)
+
+        if filepath.exists():
+            return [os.path.abspath(os.path.join(path, f"failing_test_{i}")) 
+            for i in range(num_tests)]
+        else:
+            return []
+        
 
     @staticmethod
     def load_passing_test_paths(path: os.PathLike) -> List[os.PathLike]:
@@ -180,5 +200,19 @@ class TestGenerator(ABC):
 
         if filepath.exists():
             return [os.path.abspath(file) for file in filepath.glob("passing_test_*")]
+        else:
+            return []
+        
+    @staticmethod
+    def load_passing_test_paths(path: os.PathLike, num_tests: int) -> List[os.PathLike]:
+        """
+        Retrieves first X number of passing test paths from specified directory.
+        Only works with text files saving method.
+        """
+        filepath = Path(path)
+
+        if filepath.exists():
+            return [os.path.abspath(os.path.join(path, f"passing_test_{i}")) 
+            for i in range(num_tests)]
         else:
             return []
