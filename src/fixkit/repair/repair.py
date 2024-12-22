@@ -1,6 +1,7 @@
 """
 The repair module provides the necessary tools to repair a fault.
 """
+from fixkit.repair.patch import get_patch
 
 import abc
 import os
@@ -27,6 +28,7 @@ from fixkit.genetic.selection import Selection, RandomSelection
 from fixkit.genetic.types import Population
 from fixkit.localization import Localization
 from fixkit.localization.location import WeightedIdentifier, WeightedLocation
+from fixkit.localization.modifier import LocationModifier, DefaultModifier
 from fixkit.localization.normalization import normalize
 from fixkit.logger import LOGGER
 from fixkit.search.search import EvolutionaryStrategy, SearchStrategy
@@ -103,6 +105,7 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         excludes: Optional[str] = None,
         line_mode: bool = False,
         serial: bool = False,
+        modifier: LocationModifier = DefaultModifier()
     ):
         """
         Initialize the genetic repair.
@@ -173,6 +176,8 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         self.minimizer.fitness = self.fitness
         self.line_mode = line_mode
         self.strategy = None
+        self.modifier = modifier
+        self.current_gen = 0
 
     def get_search_strategy(self) -> SearchStrategy:
         return EvolutionaryStrategy(
@@ -219,6 +224,18 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         normalize(suggestions)
         self.set_suggestions(suggestions)
 
+        # Logging suggestions
+        modified_suggestions = self.modifier.locations(self.suggestions)
+        for i, suggestion in enumerate(self.suggestions[:5]):
+            modified = modified_suggestions[i] if i < len(modified_suggestions) else None
+            LOGGER.info(
+                f"Suggestion {i + 1}: {suggestion}" +
+                (f" modified to {modified.identifier}({self.modifier.mutation_chance(modified):.4f})."
+                if modified else " not used in the repair.")
+            )
+        if len(self.suggestions) > 5:
+            LOGGER.info("...")
+
         # Evaluate the fitness for the initial candidate to reduce overhead.
         LOGGER.info("Evaluating the fitness for the initial candidate.")
         self.fitness.evaluate(self.population)
@@ -234,9 +251,11 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
             self.fitness.evaluate(self.population)
 
             # Iterate until the maximum number of generations is reached or the fault is repaired.
-            for gen in range(self.max_generations):
-                LOGGER.info(f"Generation {gen + 1}/{self.max_generations}:")
+            while self.current_gen < self.max_generations:
+                LOGGER.info(f"Generation {self.current_gen + 1}/{self.max_generations}:")
                 self.iteration()
+                self.log_fitness()
+                self.current_gen += 1
                 if self.abort():
                     LOGGER.info("Found a repair for the fault.")
                     break
@@ -246,6 +265,21 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
                 )
         else:
             LOGGER.info("The fault is already repaired.")
+
+    def log_fitness(self):
+        if self.population:
+            best_candidate = max(self.population, key=lambda c: c.fitness)
+            LOGGER.info("The best candidate has a fitness of %.2f.", best_candidate.fitness)
+            LOGGER.info("With the following mutations: %s", best_candidate.mutations)
+        else:
+            LOGGER.info("No candidates in the population.")
+
+        # Verbose logging:
+        # 
+        # for i, candidate in enumerate(self.population):
+        #     if candidate.mutations:
+        #         LOGGER.info(f"Candidate {i} has a fitness of "
+        #                     f"{candidate.fitness:.2f} by mutating {candidate.mutations}")
 
     def finalize_repair(self):
         # Minimize the population and return the best candidates.
@@ -307,6 +341,8 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
                     self.suggestions.append(
                         WeightedIdentifier(identifier, suggestion.weight)
                     )
+
+        self.suggestions = sorted(self.suggestions, key=lambda x: (-x.weight, x.identifier))
 
     # noinspection PyMethodMayBeStatic
     def prepare_population(self, population: Population) -> Population:
@@ -381,8 +417,8 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         :return GeneticCandidate: The new mutated candidate.
         """
         candidate = selection.clone()
-        for location in self.suggestions:
-            if self.should_mutate(location.weight):
+        for location in self.modifier.locations(self.suggestions):
+            if self.should_mutate(location):
                 candidate.mutations.append(
                     random.choices(self.operator, weights=self.operator_weights, k=1)[
                         0
@@ -390,13 +426,13 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
                 )
         return [candidate]
 
-    def should_mutate(self, weight: float) -> bool:
+    def should_mutate(self, location: WeightedIdentifier) -> bool:
         """
-        Check if a mutation should occur based on the weight.
+        Check if a mutation should occur based on the chosen modifier.
         :param float weight: The weight of the location.
         :return bool: True if a mutation should occur, False otherwise.
         """
-        return random.random() < weight and random.random() < self.w_mut
+        return random.random() < self.modifier.mutation_chance(location) and random.random() < self.w_mut
 
     # noinspection PyMethodMayBeStatic
     def filter_population(self, population: Population) -> Population:

@@ -13,6 +13,7 @@ from fixkit.genetic.minimize import DDMutationMinimizer
 from fixkit.genetic.operators import Delete, InsertBoth, Replace
 from fixkit.localization import Localization
 from fixkit.localization.location import WeightedLocation
+from fixkit.localization.modifier import LocationModifier, DefaultModifier
 from fixkit.repair.repair import GeneticRepair
 from fixkit.genetic.selection import UniversalSelection, Selection
 
@@ -37,8 +38,12 @@ class PyGenProg(GeneticRepair):
         is_t4p: bool = False,
         is_system_test: bool = False,
         system_tests: Optional[os.PathLike | List[os.PathLike]] = None,
+        failing_tests: Optional[os.PathLike | List[os.PathLike]] = None,
+        passing_tests: Optional[os.PathLike | List[os.PathLike]] = None,
         line_mode: bool = False,
         excludes: Optional[List[str]] = None,
+        serial: bool = False,
+        modifier: LocationModifier = DefaultModifier(),
     ):
         """
         Initialize the GenProg repair.
@@ -54,6 +59,8 @@ class PyGenProg(GeneticRepair):
         :param float w_neg_t: The weight for the negative test cases.
         """
         self.metric = GenProgFitness(set(), set(), w_pos_t=w_pos_t, w_neg_t=w_neg_t)
+        self.failing_tests = set(failing_tests)
+        self.passing_tests = set(passing_tests)
         super().__init__(
             src=src,
             fitness=self.metric,
@@ -69,9 +76,11 @@ class PyGenProg(GeneticRepair):
             out=out,
             is_t4p=is_t4p,
             is_system_test=is_system_test,
-            system_tests=system_tests,
+            system_tests=system_tests or passing_tests + failing_tests,
             line_mode=line_mode,
             excludes=excludes,
+            serial=serial,
+            modifier=modifier,
         )
 
     @classmethod
@@ -104,7 +113,11 @@ class PyGenProg(GeneticRepair):
         is_t4p: bool = False,
         is_system_test: bool = False,
         system_tests: Optional[os.PathLike | List[os.PathLike]] = None,
+        failing_tests: Optional[os.PathLike | List[os.PathLike]] = None,
+        passing_tests: Optional[os.PathLike | List[os.PathLike]] = None,
         line_mode: bool = False,
+        serial: bool = False,
+        modifier: LocationModifier = DefaultModifier(),
     ) -> "PyGenProg":
         """
         Create a GenProg repair from the source.
@@ -135,20 +148,25 @@ class PyGenProg(GeneticRepair):
             is_t4p=is_t4p,
             is_system_test=is_system_test,
             system_tests=system_tests,
+            failing_tests=failing_tests,
+            passing_tests=passing_tests,
             line_mode=line_mode,
             excludes=excludes,
+            serial=serial,
+            modifier=modifier,
         )
 
     def localize(self) -> List[WeightedLocation]:
         """
-        Localize the fault using the localization and report the passing and failing tests to the metric.
+        Localize the fault using the localization and report the passing and failing tests to the metric
+        if no failing or passing tests are specified directly.
         :return List[WeightedLocation]: The list of weighted locations.
         """
         suggestions = super().localize()
-        self.metric.passing, self.metric.failing = (
-            self.localization.passing,
-            self.localization.failing,
-        )
+
+        self.metric.failing = self.failing_tests or self.localization.failing
+        self.metric.passing = self.passing_tests or self.localization.passing
+
         return suggestions
 
 

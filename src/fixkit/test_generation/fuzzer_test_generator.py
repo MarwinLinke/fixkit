@@ -6,8 +6,8 @@ from fixkit.test_generation.test_generator import TestGenerator
 from fixkit.constants import DEFAULT_WORK_DIR
 from fixkit.logger import LOGGER
 
-from avicenna.core import Grammar
-from avicenna.data import OracleResult
+from debugging_framework.input.oracle import OracleResult
+from isla.fuzzer import Grammar
 from isla.fuzzer import GrammarFuzzer
 
 class GrammarFuzzerTestGenerator(TestGenerator):
