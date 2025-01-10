@@ -6,6 +6,7 @@ from fixkit.repair.patch import get_patch
 import abc
 import os
 import random
+import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Collection, List, Type, Optional, Any
@@ -225,16 +226,19 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         self.set_suggestions(suggestions)
 
         # Logging suggestions
+        num_shown_suggestions = len(suggestions) if LOGGER.isEnabledFor(logging.DEBUG) else 5
         modified_suggestions = self.modifier.locations(self.suggestions)
-        for i, suggestion in enumerate(self.suggestions[:5]):
+        for i, suggestion in enumerate(self.suggestions[:num_shown_suggestions]):
             modified = modified_suggestions[i] if i < len(modified_suggestions) else None
             LOGGER.info(
                 f"Suggestion {i + 1}: {suggestion}" +
                 (f" modified to {modified.identifier}({self.modifier.mutation_chance(modified):.4f})."
                 if modified else " not used in the repair.")
             )
-        if len(self.suggestions) > 5:
+        if len(self.suggestions) > num_shown_suggestions:
             LOGGER.info("...")
+        LOGGER.info(f"Found a total of {len(self.suggestions)} suggestions, " + 
+                    f"from which {len(modified_suggestions)} are used.")
 
         # Evaluate the fitness for the initial candidate to reduce overhead.
         LOGGER.info("Evaluating the fitness for the initial candidate.")
@@ -274,12 +278,10 @@ class GeneticRepair(LocalizationRepair, abc.ABC):
         else:
             LOGGER.info("No candidates in the population.")
 
-        # Verbose logging:
-        # 
-        # for i, candidate in enumerate(self.population):
-        #     if candidate.mutations:
-        #         LOGGER.info(f"Candidate {i} has a fitness of "
-        #                     f"{candidate.fitness:.2f} by mutating {candidate.mutations}")
+        for i, candidate in enumerate(self.population):
+            if candidate.mutations:
+                LOGGER.debug(f"Candidate {i} has a fitness of "
+                            f"{candidate.fitness:.2f} by mutating {candidate.mutations}")
 
     def finalize_repair(self):
         # Minimize the population and return the best candidates.
